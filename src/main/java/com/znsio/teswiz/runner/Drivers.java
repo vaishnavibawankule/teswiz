@@ -4,10 +4,17 @@ import com.context.TestExecutionContext;
 import com.znsio.teswiz.entities.Platform;
 import com.znsio.teswiz.entities.TEST_CONTEXT;
 import com.znsio.teswiz.exceptions.InvalidTestDataException;
+import io.cucumber.java.Scenario;
+import io.cucumber.java.Status;
+import kong.unirest.json.JSONObject;
 import org.apache.log4j.Logger;
+import org.assertj.core.api.SoftAssertions;
 import org.jetbrains.annotations.NotNull;
 import org.openqa.selenium.Capabilities;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.WebDriver;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -82,8 +89,22 @@ public class Drivers {
         userPersonaDetails.addDriver(userPersona, currentDriver);
         LOGGER.info(String.format("createDriverFor: done: userPersona: '%s', Platform: '%s'%n",
                                   userPersona, forPlatform.name()));
-
+        updateTestNameInCloud(currentDriver.getInnerDriver(), context.getTestName(), userPersona);
         return currentDriver;
+    }
+
+    private static void updateTestNameInCloud(WebDriver driver, String testName, String userPersona) {
+        String updatedTestName = testName + "-" + userPersona;
+        if (Runner.getCloudName().equalsIgnoreCase("browserstack")) {
+            LOGGER.info(String.format("updateTestNameInCloud for BrowserStack: '%s'", updatedTestName));
+            final JavascriptExecutor jse = (JavascriptExecutor) driver;
+            JSONObject executorObject = new JSONObject();
+            JSONObject argumentsObject = new JSONObject();
+            argumentsObject.put("name", updatedTestName);
+            executorObject.put("action", "setSessionName");
+            executorObject.put("arguments", argumentsObject);
+            jse.executeScript(String.format("browserstack_executor: %s", executorObject));
+        }
     }
 
     @NotNull
@@ -197,7 +218,7 @@ public class Drivers {
         return userPersonaDetails.getPlatformAssignedForUser(userPersona);
     }
 
-    public static void attachLogsAndCloseAllDrivers() {
+    public static void attachLogsAndCloseAllDrivers(Scenario scenario) {
         long currentThreadId = Thread.currentThread().getId();
         LOGGER.info(String.format("Close all drivers for test on ThreadId: - %d", currentThreadId));
         TestExecutionContext context = getTestExecutionContext(currentThreadId);
@@ -208,6 +229,7 @@ public class Drivers {
         LOGGER.info("Closing driver for the following userPersonas: " + allAssignedUserPersonasAndDrivers.keySet());
         allAssignedUserPersonasAndDrivers.forEach((userPersona, driver) -> {
             driver.getVisual().takeScreenshot("afterHooks", userPersona);
+            updateTestStatusInCloud(driver.getInnerDriver(), scenario.getStatus());
             LOGGER.info(String.format(
                     "\tGetting visual validation results and closing driver for: User Persona: %s",
                     userPersona));
@@ -220,6 +242,44 @@ public class Drivers {
         userPersonaDetails.clearAllCapabilities();
         userPersonaDetails.clearAllPlatforms();
         userPersonaDetails.clearLogFileNames();
+    }
+
+    private static void updateTestStatusInCloud(WebDriver driver, Status cucumberScenarioStatus) {
+        LOGGER.info("Scenario status: " + cucumberScenarioStatus);
+        long currentThreadId = Thread.currentThread().getId();
+        SoftAssertions softly = Runner.getSoftAssertion(currentThreadId);
+
+        String scenarioStatus = "passed";
+        String scenarioFailureReasons = "Scenario passed";
+
+        if (!cucumberScenarioStatus.equals(Status.PASSED)) {
+            scenarioStatus = "failed";
+            scenarioFailureReasons = "Assertion failure";
+        }
+
+        if (!softly.errorsCollected().isEmpty()) {
+            scenarioStatus = "failed";
+            String scenarioSoftFailureReasons = String.format("'%d' Soft Assertion failure(s)", softly.errorsCollected().size());
+            scenarioFailureReasons = scenarioFailureReasons.toLowerCase().contains("failure") ? scenarioFailureReasons + ", and " + scenarioSoftFailureReasons : scenarioSoftFailureReasons;
+        }
+
+        LOGGER.info(String.format("Scenario status: '%s' :: '%s'", scenarioStatus, scenarioFailureReasons));
+
+        if (Runner.getCloudName().equalsIgnoreCase("browserstack")) {
+            updateTestStatusInBrowserStack((JavascriptExecutor) driver, scenarioStatus, scenarioFailureReasons);
+        }
+    }
+
+    private static void updateTestStatusInBrowserStack(JavascriptExecutor driver, String scenarioStatus, String scenarioFailureReasons) {
+        LOGGER.info(String.format("updateTestStatusInCloud for BrowserStack: '%s'", scenarioStatus));
+        final JavascriptExecutor jse = driver;
+        JSONObject executorObject = new JSONObject();
+        JSONObject argumentsObject = new JSONObject();
+        argumentsObject.put("status", scenarioStatus);
+        argumentsObject.put("reason", scenarioFailureReasons);
+        executorObject.put("action", "setSessionStatus");
+        executorObject.put("arguments", argumentsObject);
+        jse.executeScript(String.format("browserstack_executor: %s", executorObject));
     }
 
     private static void validateVisualTestResults(String userPersona, Driver driver) {
