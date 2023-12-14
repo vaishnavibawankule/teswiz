@@ -23,6 +23,7 @@ import com.znsio.teswiz.exceptions.InvalidTestDataException;
 import com.znsio.teswiz.exceptions.VisualTestSetupException;
 import com.znsio.teswiz.tools.ReportPortalLogger;
 import com.znsio.teswiz.tools.ScreenShotManager;
+import com.znsio.teswiz.tools.Wait;
 import org.apache.log4j.Logger;
 import org.assertj.core.api.SoftAssertions;
 import org.jetbrains.annotations.NotNull;
@@ -298,9 +299,29 @@ public class Visual {
         } else {
             JavascriptExecutor js = (JavascriptExecutor) innerDriver;
             if (Runner.getPlatform().equals(Platform.electron)) {
-                Set<String> windowHandles = innerDriver.getWindowHandles();
+                Set<String> windowHandles = null;
+                int maxAttempts = 4;
+                int currentAttempt = 0;
+                do {
+                    try {
+                        windowHandles = innerDriver.getWindowHandles();
+                        if (windowHandles.size() > 0) {
+                            break;
+                        } else {
+                            Wait.waitFor(2);
+                        }
+                    } catch (Exception e) {
+                        Wait.waitFor(2);
+                    }
+                    currentAttempt++;
+                }while (currentAttempt < maxAttempts);
                 if (windowHandles.size() > 0) {
-                    innerDriver.switchTo().window((String) windowHandles.toArray()[0]);
+                    if (windowHandles.size() == 1) {
+                        innerDriver.switchTo().window((String) windowHandles.toArray()[0]);
+                    }
+                    if(windowHandles.size() == 2 ){
+                        innerDriver.switchTo().window((String) windowHandles.toArray()[1]);
+                    }
                 }
             } else {
                 Dimension actualBrowserSize = innerDriver.manage().window().getSize();
